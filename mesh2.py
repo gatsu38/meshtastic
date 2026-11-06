@@ -7,7 +7,13 @@ import meshtastic
 import meshtastic.ble_interface
 from pubsub import pub
 
-BLE_ADDRESS = "B8:1F:3F:D9:0C:CD"
+
+if len(sys.argv) != 2:
+    print(f"Usage: {sys.argv[0]} <BLE_ADDRESS>")
+    print(f"Example: {sys.argv[0]} B8:1F:3F:D9:0C:CD")
+    sys.exit(1)
+
+BLE_ADDRESS = sys.argv[1]
 
 logging.basicConfig(
     filename="/tmp/mesh",

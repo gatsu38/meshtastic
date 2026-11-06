@@ -38,7 +38,7 @@ def readable_payload(value):
 
 
 # Read packet log
-for line in open("/tmp/mesh_usb", errors="replace"):
+for line in open("/tmp/mesh", errors="replace"):
     if "Received from radio: packet {" in line:
         in_block, pkt = True, {}
         continue
