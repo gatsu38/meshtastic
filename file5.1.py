@@ -3,7 +3,7 @@ import ast
 import time
 from collections import defaultdict
 
-LOG_FILE = "/tmp/mesh_usb"
+LOG_FILE = "/tmp/mesh"
 
 packets = []
 

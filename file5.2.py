@@ -1,0 +1,188 @@
+import re
+import time
+from collections import defaultdict
+
+KEYS = (
+    "from|to|rx_time|portnum|hop_start|hop_limit|"
+    "relay_node|rx_rssi|rx_snr|payload"
+)
+
+packets = []
+in_block = False
+pkt = {}
+
+SIMPLE_ESCAPES = {
+    "n": 10, "r": 13, "t": 9,
+    '"': 34, "'": 39, "\\": 92,
+}
+
+
+def unescape_proto(value):
+    """Decode a protobuf text-format string like "\\rD\\275j" into bytes."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        value = value[1:-1]
+
+    out = bytearray()
+    i = 0
+    while i < len(value):
+        c = value[i]
+        if c != "\\":
+            out += c.encode("utf-8")
+            i += 1
+            continue
+
+        i += 1
+        if i >= len(value):
+            break
+        c = value[i]
+
+        if c in "01234567":                      # octal escape, up to 3 digits
+            j = i
+            while j < len(value) and j < i + 3 and value[j] in "01234567":
+                j += 1
+            out.append(int(value[i:j], 8) & 0xFF)
+            i = j
+        elif c == "x":                           # hex escape
+            j = i + 1
+            while j < len(value) and j < i + 3 and value[j] in "0123456789abcdefABCDEF":
+                j += 1
+            out.append(int(value[i + 1:j], 16))
+            i = j
+        else:
+            out.append(SIMPLE_ESCAPES.get(c, ord(c)))
+            i += 1
+
+    return bytes(out)
+
+
+def format_payload(value, max_hex=48):
+    """Return (kind, text) for display under the packet line."""
+    if not value:
+        return None
+
+    data = unescape_proto(value)
+    if not data:
+        return None
+
+    try:
+        text = data.decode("utf-8").rstrip("\x00")
+        if text and sum(c.isprintable() or c in "\r\n\t" for c in text) / len(text) >= 0.90:
+            return "text", repr(text)
+    except UnicodeDecodeError:
+        pass
+
+    shown = data[:max_hex]
+    hexstr = " ".join(f"{b:02x}" for b in shown)
+    if len(data) > max_hex:
+        hexstr += " ..."
+    return "hex", f"{len(data)} bytes: {hexstr}"
+
+
+# Read packet log
+for line in open("/tmp/mesh", errors="replace"):
+    if "Received from radio: packet {" in line:
+        in_block, pkt = True, {}
+        continue
+
+    if not in_block:
+        continue
+
+    if line.rstrip() == "}":
+        if "from" in pkt:
+            packets.append(pkt)
+        in_block = False
+        continue
+
+    m = re.match(rf"\s+({KEYS}):\s*(.*)", line)
+    if m:
+        pkt[m.group(1)] = m.group(2).strip()
+
+
+# Build node lookup using last byte of node ID
+by_byte = defaultdict(set)
+
+for p in packets:
+    n = int(p["from"])
+    by_byte[n & 0xFF].add(n)
+
+
+# Display packets
+for p in packets:
+    sender = int(p["from"])
+
+    t = (
+        time.strftime(
+            "%H:%M:%S",
+            time.localtime(int(p["rx_time"]))
+        )
+        if "rx_time" in p else "--:--:--"
+    )
+
+    # Recipient
+    recipient = (
+        f"!{int(p['to']):08x}"
+        if "to" in p and int(p["to"]) != 0xFFFFFFFF
+        else "BROADCAST"
+    )
+
+    # Port
+    port = p.get("portnum", "ENCRYPTED")
+
+    # Hop count
+    if "hop_start" in p and "hop_limit" in p:
+        taken = int(p["hop_start"]) - int(p["hop_limit"])
+        hops = (
+            "direct" if taken == 0
+            else f"{taken} hop{'s' if taken != 1 else ''}"
+        )
+        hops += f" (start {p['hop_start']}, left {p['hop_limit']})"
+    else:
+        taken = None
+        hops = "hops ?"
+
+    # RSSI and SNR
+    rssi = p.get("rx_rssi", "N/A")
+    snr = p.get("rx_snr", "N/A")
+
+    # Relay identification
+    if "relay_node" not in p:
+        relay = "relay ?"
+
+    else:
+        b = int(p["relay_node"])
+
+        if taken == 0:
+            relay = f"direct / sender (..{b:02x})"
+
+        else:
+            cands = sorted(by_byte.get(b, set()) - {sender})
+
+            if len(cands) == 1:
+                relay = f"!{cands[0]:08x}"
+
+            elif cands:
+                relay = "relay ..{:02x} = {}".format(
+                    b,
+                    " or ".join(f"!{c:08x}" for c in cands)
+                )
+
+            else:
+                relay = f"relay ..{b:02x} (not found)"
+
+    print(
+        f"{t}  "
+        f"!{sender:08x} -> {recipient:<12} "
+        f"{port:<16} "
+        f"RSSI: {rssi:>5} dBm  "
+        f"SNR: {snr:>5} dB  "
+        f"{hops:<30} "
+        f"Forwarder: {relay}"
+    )
+
+    # Payload, indented under its packet
+    payload = format_payload(p.get("payload", ""))
+    if payload:
+        kind, text = payload
+        label = "MSG" if kind == "text" else "PAYLOAD"
+        print(f"           {label}: {text}")

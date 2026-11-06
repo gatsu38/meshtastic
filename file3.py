@@ -4,7 +4,7 @@ from collections import defaultdict
 KEYS = "from|rx_time|portnum|hop_start|hop_limit|relay_node"
 packets, in_block, pkt = [], False, {}
 
-for line in open("mesh", errors="replace"):
+for line in open("/tmp/mesh", errors="replace"):
     if "Received from radio: packet {" in line:
         in_block, pkt = True, {}
         continue
