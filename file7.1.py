@@ -1,5 +1,14 @@
 import re
 import time
+import argparse
+import csv
+import sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-a", "--csv", action="store_true",
+                    help="print one CSV row per packet instead of the readable format")
+args = parser.parse_args()
+
 from collections import defaultdict
 
 from google.protobuf.json_format import MessageToDict
@@ -202,6 +211,16 @@ for p in packets:
     n = int(p["from"])
     by_byte[n & 0xFF].add(n)
 
+
+writer = csv.writer(sys.stdout)
+
+if args.csv:
+    writer.writerow([
+        "time", "from_id", "from_short", "from_long", "to",
+        "port", "rssi", "snr", "hops_taken", "hop_start", "hop_limit",
+        "forwarder", "payload_type", "payload",
+    ])
+    
 
 # Display packets
 for p in packets:
