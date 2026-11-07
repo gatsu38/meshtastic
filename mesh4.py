@@ -37,6 +37,53 @@ def node_id(value):
     return str(value)
 
 
+def find_nodes_by_last_byte(interface, b, exclude=()):
+    """Meshtastic packets only carry the last byte of the relay's node number,
+    so look through the radio's node database for nodes ending in that byte."""
+    matches = []
+    for n in list((interface.nodes or {}).values()):
+        num = n.get("num")
+        if num is None or num in exclude:
+            continue
+        if num & 0xFF == b:
+            user = n.get("user", {})
+            matches.append((num, user.get("shortName", ""), user.get("longName", ""), n.get("snr")))
+    return matches
+
+
+def describe_relay(packet, interface, my_num):
+    b = packet.get("relayNode")
+    if b is None:
+        return "relay: not reported in this packet"
+
+    exclude = (my_num,) if my_num is not None else ()
+    matches = find_nodes_by_last_byte(interface, b, exclude)
+
+    if not matches:
+        text = f"relay: ..{b:02x} (not in node database)"
+    else:
+        names = " or ".join(
+            f"!{num:08x} [{short}] {long_}".rstrip() for num, short, long_, _ in matches
+        )
+        text = f"relay: ..{b:02x} = {names}"
+        if len(matches) > 1:
+            text += "  (ambiguous: several nodes share that last byte)"
+
+    if my_num is not None and b == (my_num & 0xFF):
+        text += "  (same last byte as your own node)"
+
+    extra = []
+    if "rxRssi" in packet:
+        extra.append(f"RSSI {packet['rxRssi']} dBm")
+    if "rxSnr" in packet:
+        extra.append(f"SNR {packet['rxSnr']} dB")
+    if "hopStart" in packet and "hopLimit" in packet:
+        extra.append(f"{packet['hopStart'] - packet['hopLimit']} hops")
+    if extra:
+        text += "\n      " + ", ".join(extra)
+
+    return text
+
 def on_receive(packet, interface):
     sender_num = packet.get("from", 0)
     sender = node_id(sender_num)
@@ -67,10 +114,14 @@ def on_receive(packet, interface):
             else:
                 status = f"ACK from {sender}"
 
+            relay_text = describe_relay(packet, interface, my_num)
+
             with print_lock:
                 print(f"\n[ACK] {status}")
                 print(f"      Packet ID: {req_id}  Message: {text!r}")
+                print(f"      {relay_text}")
                 print("\nmesh> ", end="", flush=True)
+
 
     with print_lock:
         with open("/tmp/mesh", "a", buffering=1) as log:
